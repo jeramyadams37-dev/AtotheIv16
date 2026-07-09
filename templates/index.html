@@ -141,6 +141,10 @@
     <div id="users-modal" class="modal">
         <div class="box">
             <h3>Online Now</h3>
+            <div style="display:flex; gap:8px; margin-bottom:12px; margin-top:8px;">
+                <input id="manual_dm_user" class="field" placeholder="Enter username..." autocomplete="off">
+                <button onclick="var u = document.getElementById('manual_dm_user').value.trim(); if(u) { openDM(u); document.getElementById('manual_dm_user').value=''; }" class="btn-primary" style="padding: 8px 12px; font-size: 13px;">DM</button>
+            </div>
             <div id="user-list-container"></div>
             <button onclick="document.getElementById('users-modal').style.display='none'" class="btn-ghost">Close</button>
         </div>
