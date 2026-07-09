@@ -110,6 +110,7 @@
         </div>
         <div class="header-right">
             <div class="pill-btn" onclick="showUsers()">👥 <span id="user-count-num">0</span></div>
+            <div class="pill-btn" onclick="showInviteModal()">✉️</div>
             <div class="pill-btn" onclick="adminClear()">🧹</div>
         </div>
     </header>
@@ -159,8 +160,28 @@
             <h3>New Chat</h3>
             <input id="new_room" class="field" placeholder="Room name" autocomplete="off">
             <input id="new_key" type="password" class="field" placeholder="Encryption key (optional)">
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); margin:8px 0;">
+                <input type="checkbox" id="new_private" style="width:auto;">
+                🔒 Make private (invite-only)
+            </label>
             <button onclick="addChat()" class="btn-primary">Join</button>
             <button onclick="closeJoinModal()" class="btn-ghost">Cancel</button>
+        </div>
+    </div>
+    <div id="invite-modal" class="modal">
+        <div class="box">
+            <h3>Invite to #<span id="invite-room-name"></span></h3>
+            <button onclick="generateInvite()" class="btn-primary">Generate Invite Code</button>
+            <div id="invite-code-display" style="display:none; margin-top:10px;">
+                <input id="invite-code-field" class="field" readonly onclick="this.select()">
+                <button onclick="copyInviteCode()" class="btn-ghost" style="margin-top:6px;">Copy Code</button>
+            </div>
+            <div style="margin-top:16px; border-top:1px solid var(--border, #333); padding-top:16px;">
+                <p style="font-size:12px; color:var(--muted); margin-bottom:8px;">Have an invite code?</p>
+                <input id="join_invite_code" class="field" placeholder="Paste invite code" autocomplete="off">
+                <button onclick="joinViaInvite()" class="btn-primary" style="margin-top:6px;">Join with Code</button>
+            </div>
+            <button onclick="closeInviteModal()" class="btn-ghost" style="margin-top:10px;">Close</button>
         </div>
     </div>
 
@@ -343,6 +364,23 @@
             }
         });
         socket.on('history', ms => { document.getElementById('messages').innerHTML = ''; ms.forEach(renderMsg); });
+        socket.on('channel_created', data => {
+            if (pendingPrivateRoom && pendingPrivateRoom.room === data.name) {
+                chats[data.name] = { key: pendingPrivateRoom.key, unread: 0, private: true };
+                saveChats(); switchChat(data.name); closeJoinModal();
+                pendingPrivateRoom = null;
+            }
+        });
+        socket.on('channel_error', data => { alert(data.message); });
+        socket.on('join_error', data => { alert(data.message); });
+        socket.on('invite_created', data => {
+            document.getElementById('invite-code-field').value = data.code;
+            document.getElementById('invite-code-display').style.display = 'block';
+        });
+        socket.on('invite_joined', data => {
+            if (!chats[data.room]) chats[data.room] = { key: null, unread: 0, private: true };
+            saveChats(); switchChat(data.room); closeInviteModal();
+        });
 
         socket.on('burn_msg', data => {
             var el = document.getElementById('msg-' + data.id);
@@ -438,10 +476,35 @@
         function addChat() {
             var r = document.getElementById('new_room').value.trim();
             var k = document.getElementById('new_key').value;
+            var priv = document.getElementById('new_private').checked;
             if (!r) return;
-            chats[r] = { key: k || null, unread: 0 };
-            saveChats(); switchChat(r); closeJoinModal();
-            document.getElementById('new_room').value = ''; document.getElementById('new_key').value = '';
+            if (priv) {
+                pendingPrivateRoom = { room: r, key: k || null };
+                socket.emit('create_channel', { name: r, private: true });
+            } else {
+                chats[r] = { key: k || null, unread: 0 };
+                saveChats(); switchChat(r); closeJoinModal();
+            }
+            document.getElementById('new_room').value = ''; document.getElementById('new_key').value = ''; document.getElementById('new_private').checked = false;
+        }
+        var pendingPrivateRoom = null;
+        function showInviteModal() {
+            document.getElementById('invite-room-name').innerText = currentChat;
+            document.getElementById('invite-code-display').style.display = 'none';
+            document.getElementById('invite-modal').style.display = 'flex';
+            closeSidebar();
+        }
+        function closeInviteModal() { document.getElementById('invite-modal').style.display = 'none'; }
+        function generateInvite() { socket.emit('generate_invite', { room: currentChat }); }
+        function copyInviteCode() {
+            var f = document.getElementById('invite-code-field');
+            f.select();
+            document.execCommand('copy');
+        }
+        function joinViaInvite() {
+            var code = document.getElementById('join_invite_code').value.trim();
+            if (!code) return;
+            socket.emit('join_via_invite', { code: code });
         }
         function adminClear() {
             if (confirm('Clear all messages in ' + currentChat + '?')) socket.emit('admin_clear', { room: currentChat });
