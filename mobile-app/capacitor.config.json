@@ -1,0 +1,9 @@
+{
+  "appId": "com.jeramyadams.atothei",
+  "appName": "Atothei",
+  "webDir": "www",
+  "server": {
+    "url": "https://atithei-469305473624.europe-west1.run.app",
+    "androidScheme": "https"
+  }
+}
