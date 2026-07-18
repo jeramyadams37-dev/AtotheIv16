@@ -6,6 +6,7 @@ patch_psycopg()
 
 import os
 import secrets
+import requests
 import socket
 import subprocess
 import threading
@@ -23,6 +24,53 @@ db.init_db()
 
 connected_users = {}
 active_sessions = {}  # token -> username, survives reconnects
+ADMIN_USERNAME = "Jeramy"
+ADMIN_ALERTS_ROOM = "🚨 Admin Alerts"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+user_active_room = {}  # sid -> room currently being viewed
+
+SUSPICIOUS_PATTERNS = [
+    "kill you", "i know where you live", "i'll hurt you", "send nudes",
+    "your address is", "buy drugs", "sell drugs", "wire me money",
+    "gift card code", "child porn", "csam"
+]
+
+def check_keywords(text):
+    lowered = (text or "").lower()
+    return any(p in lowered for p in SUSPICIOUS_PATTERNS)
+
+def call_gemini_moderation(text):
+    if not GEMINI_API_KEY:
+        return {"action": "allow", "reason": "no API key configured"}
+    try:
+        prompt = (
+            "You are a chat moderation classifier. Given the message below, respond ONLY with JSON: "
+            '{"action": "allow" or "suspend", "reason": "short explanation"}. '
+            "Use 'suspend' only for genuine harassment, threats, or illegal activity - not mild rudeness or jokes.\n\n"
+            f"Message: {text}"
+        )
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=8
+        )
+        data = resp.json()
+        raw = data["candidates"][0]["content"]["parts"][0]["text"]
+        raw = raw.strip().strip("`").replace("json", "", 1).strip()
+        import json as _json
+        parsed = _json.loads(raw)
+        if parsed.get("action") not in ("allow", "suspend"):
+            parsed["action"] = "allow"
+        return parsed
+    except Exception as e:
+        return {"action": "allow", "reason": f"moderation check failed: {e}"}
+
+def notify_user(username, ntype, content, room=None):
+    db.add_notification(username, ntype, content, room)
+    for sid, uname in connected_users.items():
+        if uname == username:
+            socketio.emit('notification', {'type': ntype, 'content': content, 'room': room}, to=sid)
+
 room_members = {}
 
 def start_public_tunnel():
@@ -109,6 +157,10 @@ def handle_auth(data):
             emit('auth_response', {'success': False, 'message': 'Username taken'})
     else:
         if db.verify_user(u, p):
+            suspended, reason = db.is_suspended(u)
+            if suspended:
+                emit('auth_response', {'success': False, 'message': f'Account suspended: {reason}'})
+                return
             success = True
         else:
             emit('auth_response', {'success': False, 'message': 'Wrong username or password'})
@@ -147,6 +199,7 @@ def on_join(data):
     if r not in room_members:
         room_members[r] = set()
     room_members[r].add(request.sid)
+    user_active_room[request.sid] = r
     
     emit('history', db.get_history(r))
     broadcast_users()

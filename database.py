@@ -163,17 +163,17 @@ def create_invite(channel, created_by, max_uses=None):
 def consume_invite(code, username):
     with get_conn() as conn:
         c = conn.cursor()
-        c.execute("SELECT channel, max_uses, uses FROM invites WHERE code = %s", (code,))
+        c.execute("SELECT channel, max_uses, uses, created_by FROM invites WHERE code = %s", (code,))
         row = c.fetchone()
         if not row:
-            return None
-        channel, max_uses, uses = row
+            return None, None
+        channel, max_uses, uses, created_by = row
         if max_uses is not None and uses >= max_uses:
-            return None
+            return None, None
         c.execute("UPDATE invites SET uses = uses + 1 WHERE code = %s", (code,))
         c.execute("INSERT INTO channel_members (channel, username) VALUES (%s, %s) ON CONFLICT DO NOTHING", (channel, username))
         conn.commit()
-        return channel
+        return channel, created_by
 
 def delete_channel(name, username):
     if not is_channel_owner(name, username):
@@ -186,3 +186,77 @@ def delete_channel(name, username):
         c.execute("DELETE FROM messages WHERE room = %s", (name,))
         conn.commit()
     return True
+
+
+def suspend_user(username, reason):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE users SET suspended = 1, suspended_reason = %s WHERE username = %s", (reason, username))
+        conn.commit()
+
+def unsuspend_user(username):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE users SET suspended = 0, suspended_reason = NULL WHERE username = %s", (username,))
+        conn.commit()
+
+def is_suspended(username):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT suspended, suspended_reason FROM users WHERE username = %s", (username,))
+        row = c.fetchone()
+        if row and row[0]:
+            return True, row[1]
+        return False, None
+
+def log_moderation_flag(room, username, message_text, reason, action):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO moderation_flags (room, username, message_text, reason, action) VALUES (%s, %s, %s, %s, %s)",
+            (room, username, message_text, reason, action)
+        )
+        conn.commit()
+
+def add_notification(username, ntype, content, room=None):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO notifications (username, type, content, room) VALUES (%s, %s, %s, %s)",
+            (username, ntype, content, room)
+        )
+        conn.commit()
+
+def get_notifications(username, limit=30):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, type, content, room, created_at, is_read FROM notifications WHERE username = %s ORDER BY id DESC LIMIT %s",
+            (username, limit)
+        )
+        rows = c.fetchall()
+        return [{'id': r[0], 'type': r[1], 'content': r[2], 'room': r[3], 'time': str(r[4]), 'read': bool(r[5])} for r in rows]
+
+def get_unread_count(username):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM notifications WHERE username = %s AND is_read = 0", (username,))
+        return c.fetchone()[0]
+
+def mark_notifications_read(username):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE notifications SET is_read = 1 WHERE username = %s", (username,))
+        conn.commit()
+
+def get_message_owner(msg_id):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute('SELECT "user" FROM messages WHERE id = %s', (msg_id,))
+        row = c.fetchone()
+        return row[0] if row else None
+
+def ensure_admin_channel(admin_username, channel_name):
+    if not channel_exists(channel_name):
+        create_channel(channel_name, admin_username, is_private=1)
+
