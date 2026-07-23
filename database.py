@@ -21,6 +21,7 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS channels (name TEXT PRIMARY KEY, owner TEXT, is_private INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
         c.execute('''CREATE TABLE IF NOT EXISTS channel_members (channel TEXT, username TEXT, PRIMARY KEY (channel, username))''')
         c.execute('''CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, channel TEXT, created_by TEXT, max_uses INTEGER, uses INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS push_tokens (username TEXT, token TEXT, platform TEXT DEFAULT 'web', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (username, token))''')
         conn.commit()
 
 def save_user(user, pwd):
@@ -260,3 +261,24 @@ def ensure_admin_channel(admin_username, channel_name):
     if not channel_exists(channel_name):
         create_channel(channel_name, admin_username, is_private=1)
 
+
+def save_push_token(username, token, platform='web'):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO push_tokens (username, token, platform) VALUES (%s, %s, %s) ON CONFLICT (username, token) DO NOTHING",
+            (username, token, platform)
+        )
+        conn.commit()
+
+def get_push_tokens(username):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT token FROM push_tokens WHERE username = %s", (username,))
+        return [r[0] for r in c.fetchall()]
+
+def remove_push_token(token):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM push_tokens WHERE token = %s", (token,))
+        conn.commit()
