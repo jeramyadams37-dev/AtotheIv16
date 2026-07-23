@@ -10,9 +10,11 @@ import requests
 import socket
 import subprocess
 import threading
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import database as db
+import firebase_admin
+from firebase_admin import messaging
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'atothei_v16_complete'
@@ -24,6 +26,13 @@ db.init_db()
 ADMIN_USERNAME = "Jeramy"
 ADMIN_ALERTS_ROOM = "🚨 Admin Alerts"
 db.ensure_admin_channel(ADMIN_USERNAME, ADMIN_ALERTS_ROOM)
+
+try:
+    firebase_admin.initialize_app()
+    FCM_ENABLED = True
+except Exception as e:
+    print(f"[FCM] Firebase Admin init failed, push notifications disabled: {e}")
+    FCM_ENABLED = False
 
 connected_users = {}
 active_sessions = {}  # token -> username, survives reconnects
@@ -71,6 +80,24 @@ def notify_user(username, ntype, content, room=None):
     for sid, uname in connected_users.items():
         if uname == username:
             socketio.emit('notification', {'type': ntype, 'content': content, 'room': room}, to=sid)
+    send_push(username, ntype, content, room)
+
+def send_push(username, ntype, content, room=None):
+    if not FCM_ENABLED:
+        return
+    for token in db.get_push_tokens(username):
+        try:
+            msg = messaging.Message(
+                notification=messaging.Notification(title=f"Atothei · {ntype.title()}", body=content[:150]),
+                data={'room': room or '', 'type': ntype},
+                token=token,
+                webpush=messaging.WebpushConfig(fcm_options=messaging.WebpushFCMOptions(link="/")),
+            )
+            messaging.send(msg)
+        except messaging.UnregisteredError:
+            db.remove_push_token(token)
+        except Exception as e:
+            print(f"[FCM] send failed for {username}: {e}")
 
 room_members = {}
 
@@ -121,6 +148,10 @@ def broadcast_room_count(room):
 @app.route('/')
 def home():
     return render_template('index.html')
+
+@app.route('/firebase-messaging-sw.js')
+def fcm_sw():
+    return send_from_directory('static', 'firebase-messaging-sw.js', mimetype='application/javascript')
 
 @app.route('/api/snap', methods=['POST'])
 def snap_api():
@@ -344,6 +375,14 @@ def on_join_via_invite(data):
     socketio.emit('sys_msg', {'room': room, 'text': f'{u} joined via invite'}, to=room)
     if created_by and created_by != u:
         notify_user(created_by, 'invite', f"{u} joined #{room} using your invite", room)
+
+@socketio.on('register_push_token')
+def on_register_push_token(data):
+    u = connected_users.get(request.sid, '')
+    token = data.get('token')
+    platform = data.get('platform', 'web')
+    if u and token:
+        db.save_push_token(u, token, platform)
 
 @socketio.on('get_notifications')
 def on_get_notifications():

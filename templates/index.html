@@ -16,6 +16,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <script src="https://sdk.snapkit.com/js/v1/create.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
     <style>
         :root { --bg: #0d0d12; --surface: #13131a; --surface2: #1a1a24; --border: rgba(255,255,255,0.07); --text: #e8e8f0; --muted: rgba(232,232,240,0.45); --sent: #5b5bf0; --sent-glow: rgba(91,91,240,0.3); --recv: #1e1e2e; --accent: #5b5bf0; --accent2: #a78bfa; --danger: #f05b5b; --green: #5bf0a0; --font: 'Sora', sans-serif; --mono: 'DM Mono', monospace; }
         body.theme-void { --bg: #000; --surface: #080808; --surface2: #0f0f0f; --sent: #ff2d55; --sent-glow: rgba(255,45,85,0.3); --recv: #111; --accent: #ff2d55; --accent2: #ff6b8a; }
@@ -258,6 +260,37 @@
         }
         var chats = loadChats();
 
+
+        var fcmMessaging = null;
+        try {
+            firebase.initializeApp({
+                apiKey: "AIzaSyBfOiwIknjGRfdmZk5UvpyrGjpouwAY_CE",
+                authDomain: "atotheiv16.firebaseapp.com",
+                projectId: "atotheiv16",
+                storageBucket: "atotheiv16.firebasestorage.app",
+                messagingSenderId: "469305473624",
+                appId: "1:469305473624:web:dc2595ee0ee4a7b20be82d"
+            });
+            fcmMessaging = firebase.messaging();
+        } catch (e) { console.warn('FCM init failed', e); }
+
+        async function setupPush() {
+            if (!fcmMessaging || !('serviceWorker' in navigator)) return;
+            try {
+                var permission = await Notification.requestPermission();
+                if (permission !== 'granted') return;
+                var reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+                var token = await fcmMessaging.getToken({
+                    vapidKey: 'BE9dl4xHQuWJZHfePtSZHALtgkNBOqmAxjrjYJwTomDzg2fCZERyiRRH6WcV-UrSMig6sRFDRZbCl8RMbKrdal8',
+                    serviceWorkerRegistration: reg
+                });
+                if (token) socket.emit('register_push_token', { token: token, platform: 'web' });
+            } catch (e) { console.warn('Push setup failed', e); }
+        }
+        if (typeof fcmMessaging !== 'undefined' && fcmMessaging) {
+            fcmMessaging.onMessage(() => {});
+        }
+
         function auth(t) {
             var u = document.getElementById('u_name').value.trim();
             var p = document.getElementById('u_pass').value;
@@ -270,9 +303,9 @@
                 updateProfileUI();
                 document.getElementById('auth-modal').style.display = 'none';
             socket.emit('get_notifications');
-            socket.emit('get_notifications');
                 Object.keys(chats).forEach(room => socket.emit('join_channel', { room }));
                 switchChat('Lobby');
+                setupPush();
             } else alert(r.message);
         });
         socket.on('resume_response', r => {
@@ -280,6 +313,7 @@
                 myUser = r.user; myAvatar = r.avatar || "";
                 updateProfileUI();
                 Object.keys(chats).forEach(room => socket.emit('join_channel', { room }));
+                setupPush();
             }
         });
 
